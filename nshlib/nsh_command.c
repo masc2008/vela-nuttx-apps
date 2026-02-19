@@ -145,9 +145,9 @@ static int watcher_daemon(int argc, FAR char *argv[])
   
   printf("timer_test: Starting timer\n");
 
-  timer.it_value.tv_sec     = 1;
+  timer.it_value.tv_sec     = 5;
   timer.it_value.tv_nsec    = 0;
-  timer.it_interval.tv_sec  = 5;
+  timer.it_interval.tv_sec  = 10;
   timer.it_interval.tv_nsec = 0;
 
   struct timespec ts;
@@ -213,6 +213,7 @@ static int testtime_del()
 static int  cmd_testtime(FAR struct nsh_vtbl_s *vtbl, int argc, FAR char **argv)
 {
   int para = 0;
+  int                status;
   int ret;
 
   nsh_output(vtbl, "masc %s, %d, %d:\n",
@@ -220,10 +221,50 @@ static int  cmd_testtime(FAR struct nsh_vtbl_s *vtbl, int argc, FAR char **argv)
   para = strtoul(argv[1], NULL, 0);
   nsh_output(vtbl, "masc %s, %d, %d:\n",
       __func__, __LINE__, para);
-
-  ret = task_create("watcher_daemon", SCHED_PRIORITY_DEFAULT,
-                    CONFIG_DEFAULT_TASK_STACKSIZE, watcher_daemon, NULL);
-
+  if (para == 1)
+    ret = task_create("watcher_daemon", SCHED_PRIORITY_DEFAULT,
+                      CONFIG_DEFAULT_TASK_STACKSIZE, watcher_daemon, NULL);
+  else if (para > 1){
+  struct itimerspec  timer;
+  struct timespec ts;
+  struct itimerspec  otimer;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  printf("%d, start time: { sec=%llu  nsec=%llu }\n",
+      __LINE__,
+          (unsigned long long)ts.tv_sec,
+          (unsigned long long)ts.tv_nsec);
+#if 0
+  timer.it_value.tv_sec     = 0;
+  timer.it_value.tv_nsec    = 0;
+  timer.it_interval.tv_sec  = 0;
+  timer.it_interval.tv_nsec = 0;
+  status = timer_settime(timerid, 0, &timer, NULL);
+  if (status != OK)
+    {
+      printf("timer_test: ERROR timer_settime failed, errno=%d\n", errno);
+      ASSERT(false);
+    }
+#endif
+  timer.it_value.tv_sec     = para;
+  timer.it_value.tv_nsec    = 0;
+  timer.it_interval.tv_sec  = para << 1;
+  timer.it_interval.tv_nsec = 0;
+  status = timer_settime(timerid, 0, &timer, &otimer);
+  printf("%d, start time: { sec=%llu  nsec=%llu }, { sec=%llu  nsec=%llu: sec=%llu  nsec=%llu  }\n",
+      __LINE__,
+          (unsigned long long)ts.tv_sec,
+          (unsigned long long)ts.tv_nsec,
+          (unsigned long long)otimer.it_value.tv_sec,
+          (unsigned long long)otimer.it_value.tv_nsec,
+          (unsigned long long)otimer.it_interval.tv_sec,
+          (unsigned long long)otimer.it_interval.tv_nsec);
+  if (status != OK)
+    {
+      printf("timer_test: ERROR timer_settime failed, errno=%d\n", errno);
+      ASSERT(false);
+    }
+  
+  }
   return ret;
 }
 /****************************************************************************
