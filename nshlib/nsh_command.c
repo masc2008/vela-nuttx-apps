@@ -39,6 +39,8 @@
 #include "nsh.h"
 #include "nsh_console.h"
 
+#include <semaphore.h>
+#include <signal.h>
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
@@ -99,6 +101,131 @@ static int cmd_expr(FAR struct nsh_vtbl_s *vtbl, int argc, FAR char **argv);
 static int  cmd_unrecognized(FAR struct nsh_vtbl_s *vtbl, int argc,
                              FAR char **argv);
 
+static sem_t g_sigev_thread_sem;
+static int g_value_received;
+static timer_t            timerid;
+
+#define MY_TIMER_SIGNAL SIGRTMIN
+#define SIGVALUE_INT    42
+
+static void sigev_thread_callback(union sigval value)
+{
+  int sival_int = value.sival_int;
+
+  printf("sigev_thread_callback: Received value %d\n" , sival_int);
+
+  g_value_received = sival_int;
+  sem_post(&g_sigev_thread_sem);
+}
+static int watcher_daemon(int argc, FAR char *argv[])
+{
+  sigset_t           set;
+  struct sigaction   act;
+  struct sigaction   oact;
+  struct sigevent    notify;
+  struct itimerspec  timer;
+  int                status;
+  int                i;
+
+  syslog(0, "masc %s, %d\n", __func__, __LINE__);
+  
+  g_value_received = -1;
+  notify.sigev_notify            = SIGEV_THREAD;
+  notify.sigev_signo             = MY_TIMER_SIGNAL;
+  notify.sigev_value.sival_int   = SIGVALUE_INT;
+  notify.sigev_notify_function   = sigev_thread_callback;
+  notify.sigev_notify_attributes = NULL;
+
+  status = timer_create(CLOCK_REALTIME, &notify, &timerid);
+  if (status != OK)
+    {
+      printf("timer_test: ERROR timer_create failed, errno=%d\n", errno);
+      ASSERT(false);
+    }
+  
+  printf("timer_test: Starting timer\n");
+
+  timer.it_value.tv_sec     = 1;
+  timer.it_value.tv_nsec    = 0;
+  timer.it_interval.tv_sec  = 5;
+  timer.it_interval.tv_nsec = 0;
+
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  printf("start time: { sec=%llu  nsec=%llu }\n",
+          (unsigned long long)ts.tv_sec,
+          (unsigned long long)ts.tv_nsec);
+  status = timer_settime(timerid, 0, &timer, NULL);
+  if (status != OK)
+    {
+      printf("timer_test: ERROR timer_settime failed, errno=%d\n", errno);
+      ASSERT(false);
+    }
+  for (i = 0; i < 300; i++)
+    {
+
+      printf("timer_test: Waiting on semaphore\n");
+      status = sem_wait(&g_sigev_thread_sem);
+      clock_gettime(CLOCK_MONOTONIC, &ts);
+      printf("abs timeout: { sec=%llu  nsec=%llu }\n",
+              (unsigned long long)ts.tv_sec,
+              (unsigned long long)ts.tv_nsec);
+      if (status != 0)
+        {
+          int error = errno;
+          if (error == EINTR)
+            {
+              printf("timer_test: sem_wait() successfully interrupted "
+                     "by signal\n");
+            }
+          else
+            {
+              printf("timer_test: ERROR sem_wait failed, errno=%d\n", error);
+              ASSERT(false);
+            }
+        }
+      else
+        {
+          printf("timer_test: ERROR awakened with no error!\n");
+          //ASSERT(false);
+        }
+
+    }
+
+  act.sa_handler = SIG_DFL;
+  status = sigaction(MY_TIMER_SIGNAL, &act, &oact);
+  return 0;
+}
+
+static int testtime_del()
+{
+  int status;
+
+  status = timer_delete(timerid);
+  if (status != OK)
+    {
+      printf("timer_test: ERROR timer_create failed, errno=%d\n", errno);
+      ASSERT(false);
+    }
+
+}
+
+static int  cmd_testtime(FAR struct nsh_vtbl_s *vtbl, int argc, FAR char **argv)
+{
+  int para = 0;
+  int ret;
+
+  nsh_output(vtbl, "masc %s, %d, %d:\n",
+      __func__, __LINE__, argc);
+  para = strtoul(argv[1], NULL, 0);
+  nsh_output(vtbl, "masc %s, %d, %d:\n",
+      __func__, __LINE__, para);
+
+  ret = task_create("watcher_daemon", SCHED_PRIORITY_DEFAULT,
+                    CONFIG_DEFAULT_TASK_STACKSIZE, watcher_daemon, NULL);
+
+  return ret;
+}
 /****************************************************************************
  * Private Data
  ****************************************************************************/
@@ -282,6 +409,7 @@ static const struct cmdmap_s g_cmdmap[] =
 #  endif
 #endif
 
+  CMD_MAP("mtime",     cmd_testtime,     1, 3, "[<cmd>]"),
 #ifndef CONFIG_NSH_DISABLE_HELP
 #  ifdef CONFIG_NSH_HELP_TERSE
   CMD_MAP("help",     cmd_help,     1, 2, "[<cmd>]"),
